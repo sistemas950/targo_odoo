@@ -30,7 +30,6 @@ def test_odoo():
 async def create_order(data: dict = Body(...)):
 
     billing = data.get("billing", {})
-
     line_items = data.get("line_items", [])
 
     customer_name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}"
@@ -38,14 +37,12 @@ async def create_order(data: dict = Body(...)):
     email = billing.get("email", "")
     order_number = str(data.get("id"))
 
-    # Conexión Odoo
+    # conexión odoo
     common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
     uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
     models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
 
-    # =========================
-    # 1. BUSCAR O CREAR CLIENTE
-    # =========================
+    # crear cliente
     partner_ids = models.execute_kw(
         ODOO_DB, uid, ODOO_PASSWORD,
         'res.partner', 'search',
@@ -58,16 +55,14 @@ async def create_order(data: dict = Body(...)):
         partner_id = models.execute_kw(
             ODOO_DB, uid, ODOO_PASSWORD,
             'res.partner', 'create',
-            [{
+            [[{
                 'name': customer_name,
                 'email': email,
                 'phone': phone
-            }]
+            }]]
         )
 
-    # =========================
-    # 2. BUSCAR WEBSITE "TARGO"
-    # =========================
+    # website
     website_ids = models.execute_kw(
         ODOO_DB, uid, ODOO_PASSWORD,
         'website', 'search',
@@ -77,9 +72,7 @@ async def create_order(data: dict = Body(...)):
 
     website_id = website_ids[0] if website_ids else False
 
-    # =========================
-    # 3. CREAR ORDEN
-    # =========================
+    # crear orden
     order_vals = {
         'partner_id': partner_id,
         'client_order_ref': order_number
@@ -95,46 +88,39 @@ async def create_order(data: dict = Body(...)):
     )
 
     # =========================
-    # RESPUESTA
+    # AGREGAR PRODUCTOS
     # =========================
+
+    for item in line_items:
+
+        product_name = item.get("name")
+        quantity = item.get("quantity", 1)
+        price = float(item.get("price", 0))
+
+        product_ids = models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'product.product', 'search',
+            [[['name', '=', product_name]]],
+            {'limit': 1}
+        )
+
+        if not product_ids:
+            continue
+
+        product_id = product_ids[0]
+
+        models.execute_kw(
+            ODOO_DB, uid, ODOO_PASSWORD,
+            'sale.order.line', 'create',
+            [[{
+                'order_id': order_id,
+                'product_id': product_id,
+                'product_uom_qty': quantity,
+                'price_unit': price
+            }]]
+        )
+
     return {
         "ok": True,
-        "order_id": order_id,
-        "website_id": website_id,
-        "customer": customer_name
+        "order_id": order_id
     }
-
-# =========================
-# 4. AGREGAR PRODUCTOS
-# =========================
-
-for item in line_items:
-
-    product_name = item.get("name")
-    quantity = item.get("quantity", 1)
-    price = float(item.get("price", 0))
-
-    # Buscar producto en Odoo
-    product_ids = models.execute_kw(
-        ODOO_DB, uid, ODOO_PASSWORD,
-        'product.product', 'search',
-        [[['name', '=', product_name]]],
-        {'limit': 1}
-    )
-
-    if not product_ids:
-        continue
-
-    product_id = product_ids[0]
-
-    # Crear línea de venta
-    models.execute_kw(
-        ODOO_DB, uid, ODOO_PASSWORD,
-        'sale.order.line', 'create',
-        [{
-            'order_id': order_id,
-            'product_id': product_id,
-            'product_uom_qty': quantity,
-            'price_unit': price
-        }]
-    )
