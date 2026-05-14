@@ -11,8 +11,6 @@ ODOO_DB = os.getenv("ODOO_DB")
 ODOO_USER = os.getenv("ODOO_USER")
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD")
 
-line_items = data.get("line_items", [])
-
 @app.get("/")
 def home():
     return {"status": "ok", "service": "targo_odoo"}
@@ -32,6 +30,8 @@ def test_odoo():
 async def create_order(data: dict = Body(...)):
 
     billing = data.get("billing", {})
+
+    line_items = data.get("line_items", [])
 
     customer_name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}"
     phone = billing.get("phone", "")
