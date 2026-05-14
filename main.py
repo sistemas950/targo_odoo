@@ -11,6 +11,8 @@ ODOO_DB = os.getenv("ODOO_DB")
 ODOO_USER = os.getenv("ODOO_USER")
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD")
 
+line_items = data.get("line_items", [])
+
 @app.get("/")
 def home():
     return {"status": "ok", "service": "targo_odoo"}
@@ -101,3 +103,38 @@ async def create_order(data: dict = Body(...)):
         "website_id": website_id,
         "customer": customer_name
     }
+
+# =========================
+# 4. AGREGAR PRODUCTOS
+# =========================
+
+for item in line_items:
+
+    product_name = item.get("name")
+    quantity = item.get("quantity", 1)
+    price = float(item.get("price", 0))
+
+    # Buscar producto en Odoo
+    product_ids = models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD,
+        'product.product', 'search',
+        [[['name', '=', product_name]]],
+        {'limit': 1}
+    )
+
+    if not product_ids:
+        continue
+
+    product_id = product_ids[0]
+
+    # Crear línea de venta
+    models.execute_kw(
+        ODOO_DB, uid, ODOO_PASSWORD,
+        'sale.order.line', 'create',
+        [{
+            'order_id': order_id,
+            'product_id': product_id,
+            'product_uom_qty': quantity,
+            'price_unit': price
+        }]
+    )
