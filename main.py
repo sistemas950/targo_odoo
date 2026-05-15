@@ -471,3 +471,234 @@ def test_woocommerce_variations():
         "product_id": product_id,
         "variations": response_data
     }
+
+@app.get("/sync-stock-from-odoo")
+def sync_stock_from_odoo():
+
+    uid, models = get_odoo_connection()
+
+    if not uid:
+        return {
+            "ok": False,
+            "error": "No se pudo autenticar con Odoo"
+        }
+
+    if not WOO_URL or not WOO_CONSUMER_KEY or not WOO_CONSUMER_SECRET:
+        return {
+            "ok": False,
+            "error": "Faltan variables de WooCommerce"
+        }
+
+    # =========================
+    # 1. BUSCAR WEBSITE TARGO
+    # =========================
+
+    website_ids = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "website",
+        "search",
+        [[["name", "ilike", "Targo"]]],
+        {"limit": 1}
+    )
+
+    if not website_ids:
+        return {
+            "ok": False,
+            "error": "No se encontró website Targo en Odoo"
+        }
+
+    website_id = website_ids[0]
+
+    # =========================
+    # 2. LEER VARIANTES DE ODOO
+    # =========================
+
+    odoo_variants = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "product.product",
+        "search_read",
+        [[
+            ["default_code", "!=", False],
+            ["product_tmpl_id.website_id", "=", website_id]
+        ]],
+        {
+            "fields": [
+                "id",
+                "display_name",
+                "default_code",
+                "qty_available",
+                "virtual_available",
+                "product_tmpl_id"
+            ],
+            "limit": 500
+        }
+    )
+
+    # =========================
+    # 3. LEER PRODUCTOS VARIABLES DE WOOCOMMERCE
+    # =========================
+
+    woo_sku_map = {}
+
+    page = 1
+
+    while True:
+
+        products_url = f"{WOO_URL}/wp-json/wc/v3/products"
+
+        products_response = requests.get(
+            products_url,
+            auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
+            params={
+                "per_page": 100,
+                "page": page,
+                "type": "variable"
+            }
+        )
+
+        if products_response.status_code != 200:
+            return {
+                "ok": False,
+                "error": "Error leyendo productos de WooCommerce",
+                "status_code": products_response.status_code,
+                "response": products_response.text
+            }
+
+        products = products_response.json()
+
+        if not products:
+            break
+
+        for product in products:
+
+            product_id = product.get("id")
+            product_name = product.get("name")
+
+            variations_url = f"{WOO_URL}/wp-json/wc/v3/products/{product_id}/variations"
+
+            variations_response = requests.get(
+                variations_url,
+                auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
+                params={
+                    "per_page": 100
+                }
+            )
+
+            if variations_response.status_code != 200:
+                continue
+
+            variations = variations_response.json()
+
+            for variation in variations:
+
+                sku = str(variation.get("sku", "")).strip()
+
+                if not sku:
+                    continue
+
+                woo_sku_map[sku] = {
+                    "product_id": product_id,
+                    "product_name": product_name,
+                    "variation_id": variation.get("id"),
+                    "variation_name": variation.get("name"),
+                    "current_stock": variation.get("stock_quantity")
+                }
+
+        page += 1
+
+    # =========================
+    # 4. ACTUALIZAR STOCK EN WOOCOMMERCE
+    # =========================
+
+    updated = []
+    not_found_in_woo = []
+    errors = []
+
+    for variant in odoo_variants:
+
+        sku = str(variant.get("default_code", "")).strip()
+
+        if not sku:
+            continue
+
+        stock = variant.get("qty_available", 0)
+
+        try:
+            stock = int(stock)
+        except Exception:
+            stock = 0
+
+        if stock < 0:
+            stock = 0
+
+        woo_match = woo_sku_map.get(sku)
+
+        if not woo_match:
+            not_found_in_woo.append({
+                "sku": sku,
+                "odoo_product": variant.get("display_name"),
+                "odoo_stock": stock
+            })
+            continue
+
+        product_id = woo_match["product_id"]
+        variation_id = woo_match["variation_id"]
+
+        update_url = f"{WOO_URL}/wp-json/wc/v3/products/{product_id}/variations/{variation_id}"
+
+        payload = {
+            "manage_stock": True,
+            "stock_quantity": stock,
+            "stock_status": "instock" if stock > 0 else "outofstock"
+        }
+
+        update_response = requests.put(
+            update_url,
+            auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
+            json=payload
+        )
+
+        try:
+            update_data = update_response.json()
+        except Exception:
+            update_data = update_response.text
+
+        if update_response.status_code in [200, 201]:
+
+            updated.append({
+                "sku": sku,
+                "odoo_product": variant.get("display_name"),
+                "woo_product": woo_match.get("product_name"),
+                "woo_variation": woo_match.get("variation_name"),
+                "old_stock_woo": woo_match.get("current_stock"),
+                "new_stock": stock,
+                "product_id": product_id,
+                "variation_id": variation_id
+            })
+
+        else:
+
+            errors.append({
+                "sku": sku,
+                "product_id": product_id,
+                "variation_id": variation_id,
+                "status_code": update_response.status_code,
+                "response": update_data
+            })
+
+    return {
+        "ok": True,
+        "website_id": website_id,
+        "odoo_variants_count": len(odoo_variants),
+        "woo_variations_with_sku_count": len(woo_sku_map),
+        "updated_count": len(updated),
+        "not_found_count": len(not_found_in_woo),
+        "error_count": len(errors),
+        "updated": updated,
+        "not_found_in_woo": not_found_in_woo,
+        "errors": errors
+    }
