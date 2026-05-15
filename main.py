@@ -1,8 +1,6 @@
 import os
 import xmlrpc.client
-from fastapi import FastAPI, Request, Body
-
-app = FastAPI()
+from fastapi import FastAPI, Body
 
 app = FastAPI()
 
@@ -11,19 +9,38 @@ ODOO_DB = os.getenv("ODOO_DB")
 ODOO_USER = os.getenv("ODOO_USER")
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD")
 
+
 @app.get("/")
 def home():
-    return {"status": "ok", "service": "targo_odoo"}
+    return {
+        "status": "ok",
+        "service": "targo_odoo"
+    }
+
 
 @app.get("/test-odoo")
 def test_odoo():
+
     common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
-    uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
+
+    uid = common.authenticate(
+        ODOO_DB,
+        ODOO_USER,
+        ODOO_PASSWORD,
+        {}
+    )
 
     if not uid:
-        return {"ok": False, "message": "No se pudo autenticar con Odoo"}
+        return {
+            "ok": False,
+            "message": "No se pudo autenticar con Odoo"
+        }
 
-    return {"ok": True, "uid": uid, "message": "Conexión correcta con Odoo"}
+    return {
+        "ok": True,
+        "uid": uid,
+        "message": "Conexión correcta con Odoo"
+    }
 
 
 @app.post("/create-order")
@@ -37,24 +54,46 @@ async def create_order(data: dict = Body(...)):
     email = billing.get("email", "")
     order_number = str(data.get("id"))
 
-    # conexión odoo
+    # =========================
+    # CONEXIÓN ODOO
+    # =========================
+
     common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
-    uid = common.authenticate(ODOO_DB, ODOO_USER, ODOO_PASSWORD, {})
+
+    uid = common.authenticate(
+        ODOO_DB,
+        ODOO_USER,
+        ODOO_PASSWORD,
+        {}
+    )
+
     models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
 
-    # crear cliente
+    # =========================
+    # BUSCAR O CREAR CLIENTE
+    # =========================
+
     partner_ids = models.execute_kw(
-        ODOO_DB, uid, ODOO_PASSWORD,
-        'res.partner', 'search',
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        'res.partner',
+        'search',
         [[['email', '=', email]]]
     )
 
     if partner_ids:
+
         partner_id = partner_ids[0]
+
     else:
+
         partner_id = models.execute_kw(
-            ODOO_DB, uid, ODOO_PASSWORD,
-            'res.partner', 'create',
+            ODOO_DB,
+            uid,
+            ODOO_PASSWORD,
+            'res.partner',
+            'create',
             [[{
                 'name': customer_name,
                 'email': email,
@@ -62,17 +101,26 @@ async def create_order(data: dict = Body(...)):
             }]]
         )
 
-    # website
+    # =========================
+    # BUSCAR WEBSITE
+    # =========================
+
     website_ids = models.execute_kw(
-        ODOO_DB, uid, ODOO_PASSWORD,
-        'website', 'search',
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        'website',
+        'search',
         [[['name', 'ilike', 'Targo']]],
         {'limit': 1}
     )
 
     website_id = website_ids[0] if website_ids else False
 
-    # crear orden
+    # =========================
+    # CREAR ORDEN
+    # =========================
+
     order_vals = {
         'partner_id': partner_id,
         'client_order_ref': order_number
@@ -82,8 +130,11 @@ async def create_order(data: dict = Body(...)):
         order_vals['website_id'] = website_id
 
     order_id = models.execute_kw(
-        ODOO_DB, uid, ODOO_PASSWORD,
-        'sale.order', 'create',
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        'sale.order',
+        'create',
         [order_vals]
     )
 
@@ -97,21 +148,49 @@ async def create_order(data: dict = Body(...)):
         quantity = item.get("quantity", 1)
         price = float(item.get("price", 0))
 
+        print(f"Buscando producto: {product_name}")
+
+        # Buscar PRODUCT TEMPLATE
         product_ids = models.execute_kw(
-            ODOO_DB, uid, ODOO_PASSWORD,
-            'product.product', 'search',
+            ODOO_DB,
+            uid,
+            ODOO_PASSWORD,
+            'product.template',
+            'search',
             [[['name', 'ilike', product_name]]],
             {'limit': 1}
         )
 
+        print(f"Encontrados: {product_ids}")
+
         if not product_ids:
             continue
 
-        product_id = product_ids[0]
+        product_template_id = product_ids[0]
 
+        # Obtener variante real del producto
+        variant_ids = models.execute_kw(
+            ODOO_DB,
+            uid,
+            ODOO_PASSWORD,
+            'product.product',
+            'search',
+            [[['product_tmpl_id', '=', product_template_id]]],
+            {'limit': 1}
+        )
+
+        if not variant_ids:
+            continue
+
+        product_id = variant_ids[0]
+
+        # Crear línea
         models.execute_kw(
-            ODOO_DB, uid, ODOO_PASSWORD,
-            'sale.order.line', 'create',
+            ODOO_DB,
+            uid,
+            ODOO_PASSWORD,
+            'sale.order.line',
+            'create',
             [[{
                 'order_id': order_id,
                 'product_id': product_id,
@@ -122,5 +201,6 @@ async def create_order(data: dict = Body(...)):
 
     return {
         "ok": True,
-        "order_id": order_id
+        "order_id": order_id,
+        "customer": customer_name
     }
