@@ -439,12 +439,36 @@ async def create_order(data: dict = Body(...)):
             "price": price
         })
 
-    return {
-        "ok": True,
-        "order_id": order_id,
-        "customer": customer_name,
-        "created_lines": created_lines,
-        "missing_products": missing_products
+    # =========================
+# 5. CONFIRMAR ORDEN EN ODOO
+# =========================
+
+confirmed = False
+confirm_error = None
+
+if created_lines:
+    try:
+        models.execute_kw(
+            ODOO_DB,
+            uid,
+            ODOO_PASSWORD,
+            "sale.order",
+            "action_confirm",
+            [[order_id]]
+        )
+        confirmed = True
+    except Exception as e:
+        confirm_error = str(e)
+
+return {
+    "ok": True,
+    "order_id": order_id,
+    "customer": customer_name,
+    "created_lines": created_lines,
+    "missing_products": missing_products,
+    "confirmed": confirmed,
+    "confirm_error": confirm_error
+}
     }
 
 @app.get("/test-woocommerce-variations")
