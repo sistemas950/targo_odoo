@@ -42,6 +42,84 @@ def test_odoo():
     }
 
 
+def extract_size_from_woo_item(item):
+    """
+    Intenta extraer la talla desde WooCommerce.
+    Woo puede mandar la talla en meta_data con keys como:
+    - Talla
+    - talla
+    - Size
+    - pa_talla
+    - attribute_talla
+    """
+
+    meta_data = item.get("meta_data", [])
+
+    for meta in meta_data:
+        key = str(meta.get("key", "")).lower()
+        value = str(meta.get("value", "")).strip()
+
+        if not value:
+            continue
+
+        if (
+            "talla" in key
+            or "size" in key
+            or "pa_talla" in key
+            or "attribute" in key
+        ):
+            return value.upper()
+
+    return ""
+
+
+def find_correct_variant(models, uid, product_template_id, size):
+    """
+    Busca la variante correcta dentro de product.product.
+    Primero intenta buscar por talla dentro del display_name.
+    Si no encuentra, regresa la primera variante como respaldo.
+    """
+
+    variants = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "product.product",
+        "search_read",
+        [[["product_tmpl_id", "=", product_template_id]]],
+        {
+            "fields": ["id", "display_name"],
+            "limit": 100
+        }
+    )
+
+    print("Variantes disponibles:", variants)
+    print("Talla buscada:", size)
+
+    if not variants:
+        return False
+
+    if size:
+        for variant in variants:
+            display_name = str(variant.get("display_name", "")).upper()
+
+            # Busca coincidencias tipo:
+            # Jacket 10 (M)
+            # Jacket 10 / M
+            # Jacket 10 - M
+            if (
+                f" {size}" in display_name
+                or f"/ {size}" in display_name
+                or f"({size})" in display_name
+                or f"- {size}" in display_name
+                or display_name.endswith(size)
+            ):
+                return variant["id"]
+
+    # Respaldo: si no encuentra la talla, toma la primera variante
+    return variants[0]["id"]
+
+
 @app.post("/create-order")
 async def create_order(data: dict = Body(...)):
 
@@ -168,19 +246,24 @@ async def create_order(data: dict = Body(...)):
         except:
             price = 0
 
+        size = extract_size_from_woo_item(item)
+
         print("========== PRODUCTO WOO ==========")
         print("Nombre Woo:", product_name)
         print("Cantidad:", quantity)
         print("Precio:", price)
+        print("Talla Woo:", size)
+        print("Meta data Woo:", item.get("meta_data", []))
 
-        # Ejemplo:
-        # Woo puede mandar: "Jacket 10 - Rosa, M"
-        # Odoo puede tener: "Jacket 10"
+        # Si Woo manda algo como:
+        # "Jacket 10 - Azul - M"
+        # nos quedamos con la primera parte:
+        # "Jacket 10"
         base_product_name = product_name.split(" - ")[0].strip()
 
         print("Nombre base para buscar en Odoo:", base_product_name)
 
-        # Buscar primero en product.template
+        # Buscar producto padre en Odoo
         template_ids = models.execute_kw(
             ODOO_DB,
             uid,
@@ -194,31 +277,32 @@ async def create_order(data: dict = Body(...)):
         print("Templates encontrados:", template_ids)
 
         if not template_ids:
-            missing_products.append(product_name)
+            missing_products.append({
+                "product_name": product_name,
+                "reason": "No se encontró product.template"
+            })
             continue
 
         product_template_id = template_ids[0]
 
-        # Buscar variante real vendible en product.product
-        product_ids = models.execute_kw(
-            ODOO_DB,
+        # Buscar variante correcta por talla
+        product_id = find_correct_variant(
+            models,
             uid,
-            ODOO_PASSWORD,
-            "product.product",
-            "search",
-            [[["product_tmpl_id", "=", product_template_id]]],
-            {"limit": 1}
+            product_template_id,
+            size
         )
 
-        print("Variantes encontradas:", product_ids)
-
-        if not product_ids:
-            missing_products.append(product_name)
+        if not product_id:
+            missing_products.append({
+                "product_name": product_name,
+                "reason": "No se encontró variante product.product"
+            })
             continue
 
-        product_id = product_ids[0]
+        print("Producto variante elegido:", product_id)
 
-        # Crear línea de pedido
+        # Crear línea de venta
         line_id = models.execute_kw(
             ODOO_DB,
             uid,
@@ -236,15 +320,12 @@ async def create_order(data: dict = Body(...)):
         created_lines.append({
             "product_name": product_name,
             "base_product_name": base_product_name,
+            "size": size,
             "product_id": product_id,
             "line_id": line_id,
             "quantity": quantity,
             "price": price
         })
-
-    # =========================
-    # 5. RESPUESTA
-    # =========================
 
     return {
         "ok": True,
