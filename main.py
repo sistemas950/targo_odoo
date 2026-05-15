@@ -9,6 +9,10 @@ ODOO_DB = os.getenv("ODOO_DB")
 ODOO_USER = os.getenv("ODOO_USER")
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD")
 
+WOO_URL= https://tudominio.com
+WOO_CONSUMER_KEY= ck_9bb163e28c0ac6d60a5bc43462713771134075e5
+WOO_CONSUMER_SECRET= cs_0dbec5e5bcde37cf0ee4059c3d0fb5b405d47250
+
 
 @app.get("/")
 def home():
@@ -333,4 +337,25 @@ async def create_order(data: dict = Body(...)):
         "customer": customer_name,
         "created_lines": created_lines,
         "missing_products": missing_products
+    }
+
+
+@app.get("/test-woocommerce")
+def test_woocommerce():
+
+    WOO_URL = os.getenv("WOO_URL")
+    WOO_CONSUMER_KEY = os.getenv("WOO_CONSUMER_KEY")
+    WOO_CONSUMER_SECRET = os.getenv("WOO_CONSUMER_SECRET")
+
+    url = f"{WOO_URL}/wp-json/wc/v3/products"
+
+    response = requests.get(
+        url,
+        auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
+        params={"per_page": 5}
+    )
+
+    return {
+        "status_code": response.status_code,
+        "response": response.json()
     }
