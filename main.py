@@ -26,8 +26,8 @@ def home():
         "service": "targo_odoo"
     }
 
-@app.get("/test-odoo-variants")
-def test_odoo_variants():
+@app.get("/test-odoo-variants-targo")
+def test_odoo_variants_targo():
 
     uid, models = get_odoo_connection()
 
@@ -37,31 +37,55 @@ def test_odoo_variants():
             "error": "No se pudo autenticar con Odoo"
         }
 
+    # Buscar website Targo
+    website_ids = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "website",
+        "search",
+        [[["name", "ilike", "Targo"]]],
+        {"limit": 1}
+    )
+
+    if not website_ids:
+        return {
+            "ok": False,
+            "error": "No se encontró el website Targo en Odoo"
+        }
+
+    website_id = website_ids[0]
+
+    # Buscar SOLO variantes cuyo producto padre pertenece al website Targo
     variants = models.execute_kw(
         ODOO_DB,
         uid,
         ODOO_PASSWORD,
         "product.product",
         "search_read",
-        [[["default_code", "!=", False]]],
+        [[
+            ["default_code", "!=", False],
+            ["product_tmpl_id.website_id", "=", website_id]
+        ]],
         {
             "fields": [
                 "id",
                 "display_name",
                 "default_code",
                 "qty_available",
+                "virtual_available",
                 "product_tmpl_id"
             ],
-            "limit": 50
+            "limit": 100
         }
     )
 
     return {
         "ok": True,
+        "website_id": website_id,
         "count": len(variants),
         "variants": variants
     }
-
 
 # =========================
 # TEST ODOO
