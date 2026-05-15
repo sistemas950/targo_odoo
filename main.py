@@ -26,6 +26,42 @@ def home():
         "service": "targo_odoo"
     }
 
+@app.get("/test-odoo-variants")
+def test_odoo_variants():
+
+    uid, models = get_odoo_connection()
+
+    if not uid:
+        return {
+            "ok": False,
+            "error": "No se pudo autenticar con Odoo"
+        }
+
+    variants = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "product.product",
+        "search_read",
+        [[["default_code", "!=", False]]],
+        {
+            "fields": [
+                "id",
+                "display_name",
+                "default_code",
+                "qty_available",
+                "product_tmpl_id"
+            ],
+            "limit": 50
+        }
+    )
+
+    return {
+        "ok": True,
+        "count": len(variants),
+        "variants": variants
+    }
+
 
 # =========================
 # TEST ODOO
