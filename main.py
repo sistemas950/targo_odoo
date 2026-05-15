@@ -386,3 +386,28 @@ async def create_order(data: dict = Body(...)):
         "created_lines": created_lines,
         "missing_products": missing_products
     }
+
+@app.get("/test-woocommerce-variations")
+def test_woocommerce_variations():
+
+    product_id = 3298  # ID del producto padre Jacket 18 en WooCommerce
+
+    url = f"{WOO_URL}/wp-json/wc/v3/products/{product_id}/variations"
+
+    response = requests.get(
+        url,
+        auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
+        params={"per_page": 100}
+    )
+
+    try:
+        response_data = response.json()
+    except Exception:
+        response_data = response.text
+
+    return {
+        "ok": response.status_code == 200,
+        "status_code": response.status_code,
+        "product_id": product_id,
+        "variations": response_data
+    }
