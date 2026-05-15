@@ -20,7 +20,6 @@ def home():
 
 @app.get("/test-odoo")
 def test_odoo():
-
     common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
 
     uid = common.authenticate(
@@ -46,13 +45,19 @@ def test_odoo():
 @app.post("/create-order")
 async def create_order(data: dict = Body(...)):
 
+    print("========== PEDIDO RECIBIDO ==========")
+    print(data)
+
     billing = data.get("billing", {})
     line_items = data.get("line_items", [])
 
-    customer_name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}"
+    customer_name = f"{billing.get('first_name', '')} {billing.get('last_name', '')}".strip()
     phone = billing.get("phone", "")
     email = billing.get("email", "")
     order_number = str(data.get("id"))
+
+    if not customer_name:
+        customer_name = "Cliente WooCommerce"
 
     # =========================
     # CONEXIÓN ODOO
@@ -67,140 +72,184 @@ async def create_order(data: dict = Body(...)):
         {}
     )
 
+    if not uid:
+        return {
+            "ok": False,
+            "error": "No se pudo autenticar con Odoo"
+        }
+
     models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
 
     # =========================
-    # BUSCAR O CREAR CLIENTE
+    # 1. BUSCAR O CREAR CLIENTE
     # =========================
 
-    partner_ids = models.execute_kw(
-        ODOO_DB,
-        uid,
-        ODOO_PASSWORD,
-        'res.partner',
-        'search',
-        [[['email', '=', email]]]
-    )
+    partner_id = False
 
-    if partner_ids:
+    if email:
+        partner_ids = models.execute_kw(
+            ODOO_DB,
+            uid,
+            ODOO_PASSWORD,
+            "res.partner",
+            "search",
+            [[["email", "=", email]]],
+            {"limit": 1}
+        )
 
-        partner_id = partner_ids[0]
+        if partner_ids:
+            partner_id = partner_ids[0]
 
-    else:
-
+    if not partner_id:
         partner_id = models.execute_kw(
             ODOO_DB,
             uid,
             ODOO_PASSWORD,
-            'res.partner',
-            'create',
-            [[{
-                'name': customer_name,
-                'email': email,
-                'phone': phone
-            }]]
+            "res.partner",
+            "create",
+            [{
+                "name": customer_name,
+                "email": email,
+                "phone": phone
+            }]
         )
 
     # =========================
-    # BUSCAR WEBSITE
+    # 2. BUSCAR WEBSITE TARGO
     # =========================
 
     website_ids = models.execute_kw(
         ODOO_DB,
         uid,
         ODOO_PASSWORD,
-        'website',
-        'search',
-        [[['name', 'ilike', 'Targo']]],
-        {'limit': 1}
+        "website",
+        "search",
+        [[["name", "ilike", "Targo"]]],
+        {"limit": 1}
     )
 
     website_id = website_ids[0] if website_ids else False
 
     # =========================
-    # CREAR ORDEN
+    # 3. CREAR SALE ORDER
     # =========================
 
     order_vals = {
-        'partner_id': partner_id,
-        'client_order_ref': order_number
+        "partner_id": partner_id,
+        "client_order_ref": order_number
     }
 
     if website_id:
-        order_vals['website_id'] = website_id
+        order_vals["website_id"] = website_id
 
     order_id = models.execute_kw(
         ODOO_DB,
         uid,
         ODOO_PASSWORD,
-        'sale.order',
-        'create',
+        "sale.order",
+        "create",
         [order_vals]
     )
 
+    created_lines = []
+    missing_products = []
+
     # =========================
-    # AGREGAR PRODUCTOS
+    # 4. AGREGAR PRODUCTOS
     # =========================
 
     for item in line_items:
 
-        product_name = item.get("name")
+        product_name = item.get("name", "").strip()
         quantity = item.get("quantity", 1)
-        price = float(item.get("price", 0))
 
-        print(f"Buscando producto: {product_name}")
+        try:
+            price = float(item.get("price", 0))
+        except:
+            price = 0
 
-        # Buscar PRODUCT TEMPLATE
+        print("========== PRODUCTO WOO ==========")
+        print("Nombre Woo:", product_name)
+        print("Cantidad:", quantity)
+        print("Precio:", price)
+
+        # Ejemplo:
+        # Woo puede mandar: "Jacket 10 - Rosa, M"
+        # Odoo puede tener: "Jacket 10"
+        base_product_name = product_name.split(" - ")[0].strip()
+
+        print("Nombre base para buscar en Odoo:", base_product_name)
+
+        # Buscar primero en product.template
+        template_ids = models.execute_kw(
+            ODOO_DB,
+            uid,
+            ODOO_PASSWORD,
+            "product.template",
+            "search",
+            [[["name", "ilike", base_product_name]]],
+            {"limit": 1}
+        )
+
+        print("Templates encontrados:", template_ids)
+
+        if not template_ids:
+            missing_products.append(product_name)
+            continue
+
+        product_template_id = template_ids[0]
+
+        # Buscar variante real vendible en product.product
         product_ids = models.execute_kw(
             ODOO_DB,
             uid,
             ODOO_PASSWORD,
-            'product.template',
-            'search',
-            [[['name', 'ilike', product_name]]],
-            {'limit': 1}
+            "product.product",
+            "search",
+            [[["product_tmpl_id", "=", product_template_id]]],
+            {"limit": 1}
         )
 
-        print(f"Encontrados: {product_ids}")
+        print("Variantes encontradas:", product_ids)
 
         if not product_ids:
+            missing_products.append(product_name)
             continue
 
-        product_template_id = product_ids[0]
+        product_id = product_ids[0]
 
-        # Obtener variante real del producto
-        variant_ids = models.execute_kw(
+        # Crear línea de pedido
+        line_id = models.execute_kw(
             ODOO_DB,
             uid,
             ODOO_PASSWORD,
-            'product.product',
-            'search',
-            [[['product_tmpl_id', '=', product_template_id]]],
-            {'limit': 1}
+            "sale.order.line",
+            "create",
+            [{
+                "order_id": order_id,
+                "product_id": product_id,
+                "product_uom_qty": quantity,
+                "price_unit": price
+            }]
         )
 
-        if not variant_ids:
-            continue
+        created_lines.append({
+            "product_name": product_name,
+            "base_product_name": base_product_name,
+            "product_id": product_id,
+            "line_id": line_id,
+            "quantity": quantity,
+            "price": price
+        })
 
-        product_id = variant_ids[0]
-
-        # Crear línea
-        models.execute_kw(
-            ODOO_DB,
-            uid,
-            ODOO_PASSWORD,
-            'sale.order.line',
-            'create',
-            [[{
-                'order_id': order_id,
-                'product_id': product_id,
-                'product_uom_qty': quantity,
-                'price_unit': price
-            }]]
-        )
+    # =========================
+    # 5. RESPUESTA
+    # =========================
 
     return {
         "ok": True,
         "order_id": order_id,
-        "customer": customer_name
+        "customer": customer_name,
+        "created_lines": created_lines,
+        "missing_products": missing_products
     }
