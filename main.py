@@ -100,7 +100,7 @@ async def create_order(data: dict = Body(...)):
         product_ids = models.execute_kw(
             ODOO_DB, uid, ODOO_PASSWORD,
             'product.product', 'search',
-            [[['name', '=', product_name]]],
+            [[['name', 'ilike', product_name]]],
             {'limit': 1}
         )
 
