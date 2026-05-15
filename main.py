@@ -26,73 +26,12 @@ def home():
         "service": "targo_odoo"
     }
 
-@app.get("/test-odoo-variants-targo")
-def test_odoo_variants_targo():
-
-    uid, models = get_odoo_connection()
-
-    if not uid:
-        return {
-            "ok": False,
-            "error": "No se pudo autenticar con Odoo"
-        }
-
-    # Buscar website Targo
-    website_ids = models.execute_kw(
-        ODOO_DB,
-        uid,
-        ODOO_PASSWORD,
-        "website",
-        "search",
-        [[["name", "ilike", "Targo"]]],
-        {"limit": 1}
-    )
-
-    if not website_ids:
-        return {
-            "ok": False,
-            "error": "No se encontró el website Targo en Odoo"
-        }
-
-    website_id = website_ids[0]
-
-    # Buscar SOLO variantes cuyo producto padre pertenece al website Targo
-    variants = models.execute_kw(
-        ODOO_DB,
-        uid,
-        ODOO_PASSWORD,
-        "product.product",
-        "search_read",
-        [[
-            ["default_code", "!=", False],
-            ["product_tmpl_id.website_id", "=", website_id]
-        ]],
-        {
-            "fields": [
-                "id",
-                "display_name",
-                "default_code",
-                "qty_available",
-                "virtual_available",
-                "product_tmpl_id"
-            ],
-            "limit": 100
-        }
-    )
-
-    return {
-        "ok": True,
-        "website_id": website_id,
-        "count": len(variants),
-        "variants": variants
-    }
 
 # =========================
-# TEST ODOO
+# FUNCIONES AUXILIARES
 # =========================
 
-@app.get("/test-odoo")
-def test_odoo():
+def get_odoo_connection():
     common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
 
     uid = common.authenticate(
@@ -103,54 +42,11 @@ def test_odoo():
     )
 
     if not uid:
-        return {
-            "ok": False,
-            "message": "No se pudo autenticar con Odoo"
-        }
+        return None, None
 
-    return {
-        "ok": True,
-        "uid": uid,
-        "message": "Conexión correcta con Odoo"
-    }
+    models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
+    return uid, models
 
-
-# =========================
-# TEST WOOCOMMERCE
-# =========================
-
-@app.get("/test-woocommerce")
-def test_woocommerce():
-
-    if not WOO_URL or not WOO_CONSUMER_KEY or not WOO_CONSUMER_SECRET:
-        return {
-            "ok": False,
-            "error": "Faltan variables de entorno de WooCommerce en Railway"
-        }
-
-    url = f"{WOO_URL}/wp-json/wc/v3/products"
-
-    response = requests.get(
-        url,
-        auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
-        params={"per_page": 5}
-    )
-
-    try:
-        response_data = response.json()
-    except Exception:
-        response_data = response.text
-
-    return {
-        "ok": response.status_code == 200,
-        "status_code": response.status_code,
-        "response": response_data
-    }
-
-
-# =========================
-# FUNCIONES AUXILIARES
-# =========================
 
 def extract_size_from_woo_item(item):
     meta_data = item.get("meta_data", [])
@@ -209,22 +105,122 @@ def find_correct_variant(models, uid, product_template_id, size):
     return variants[0]["id"]
 
 
-def get_odoo_connection():
-    common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
+# =========================
+# TEST ODOO
+# =========================
 
-    uid = common.authenticate(
-        ODOO_DB,
-        ODOO_USER,
-        ODOO_PASSWORD,
-        {}
-    )
+@app.get("/test-odoo")
+def test_odoo():
+    uid, models = get_odoo_connection()
 
     if not uid:
-        return None, None
+        return {
+            "ok": False,
+            "message": "No se pudo autenticar con Odoo"
+        }
 
-    models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
+    return {
+        "ok": True,
+        "uid": uid,
+        "message": "Conexión correcta con Odoo"
+    }
 
-    return uid, models
+
+# =========================
+# TEST WOOCOMMERCE
+# =========================
+
+@app.get("/test-woocommerce")
+def test_woocommerce():
+
+    if not WOO_URL or not WOO_CONSUMER_KEY or not WOO_CONSUMER_SECRET:
+        return {
+            "ok": False,
+            "error": "Faltan variables de entorno de WooCommerce en Railway"
+        }
+
+    url = f"{WOO_URL}/wp-json/wc/v3/products"
+
+    response = requests.get(
+        url,
+        auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
+        params={"per_page": 5}
+    )
+
+    try:
+        response_data = response.json()
+    except Exception:
+        response_data = response.text
+
+    return {
+        "ok": response.status_code == 200,
+        "status_code": response.status_code,
+        "response": response_data
+    }
+
+
+# =========================
+# TEST VARIANTES TARGO EN ODOO
+# =========================
+
+@app.get("/test-odoo-variants-targo")
+def test_odoo_variants_targo():
+
+    uid, models = get_odoo_connection()
+
+    if not uid:
+        return {
+            "ok": False,
+            "error": "No se pudo autenticar con Odoo"
+        }
+
+    website_ids = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "website",
+        "search",
+        [[["name", "ilike", "Targo"]]],
+        {"limit": 1}
+    )
+
+    if not website_ids:
+        return {
+            "ok": False,
+            "error": "No se encontró el website Targo en Odoo"
+        }
+
+    website_id = website_ids[0]
+
+    variants = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "product.product",
+        "search_read",
+        [[
+            ["default_code", "!=", False],
+            ["product_tmpl_id.website_id", "=", website_id]
+        ]],
+        {
+            "fields": [
+                "id",
+                "display_name",
+                "default_code",
+                "qty_available",
+                "virtual_available",
+                "product_tmpl_id"
+            ],
+            "limit": 100
+        }
+    )
+
+    return {
+        "ok": True,
+        "website_id": website_id,
+        "count": len(variants),
+        "variants": variants
+    }
 
 
 # =========================
@@ -376,8 +372,6 @@ async def create_order(data: dict = Body(...)):
 
         base_product_name = product_name.split(" - ")[0].strip()
 
-        print("Nombre base para buscar en Odoo:", base_product_name)
-
         template_ids = models.execute_kw(
             ODOO_DB,
             uid,
@@ -387,8 +381,6 @@ async def create_order(data: dict = Body(...)):
             [[["name", "ilike", base_product_name]]],
             {"limit": 1}
         )
-
-        print("Templates encontrados:", template_ids)
 
         if not template_ids:
             missing_products.append({
@@ -412,8 +404,6 @@ async def create_order(data: dict = Body(...)):
                 "reason": "No se encontró variante product.product"
             })
             continue
-
-        print("Producto variante elegido:", product_id)
 
         line_id = models.execute_kw(
             ODOO_DB,
@@ -440,41 +430,45 @@ async def create_order(data: dict = Body(...)):
         })
 
     # =========================
-# 5. CONFIRMAR ORDEN EN ODOO
-# =========================
+    # 5. CONFIRMAR ORDEN EN ODOO
+    # =========================
 
-confirmed = False
-confirm_error = None
+    confirmed = False
+    confirm_error = None
 
-if created_lines:
-    try:
-        models.execute_kw(
-            ODOO_DB,
-            uid,
-            ODOO_PASSWORD,
-            "sale.order",
-            "action_confirm",
-            [[order_id]]
-        )
-        confirmed = True
-    except Exception as e:
-        confirm_error = str(e)
+    if created_lines:
+        try:
+            models.execute_kw(
+                ODOO_DB,
+                uid,
+                ODOO_PASSWORD,
+                "sale.order",
+                "action_confirm",
+                [[order_id]]
+            )
+            confirmed = True
+        except Exception as e:
+            confirm_error = str(e)
 
-return {
-    "ok": True,
-    "order_id": order_id,
-    "customer": customer_name,
-    "created_lines": created_lines,
-    "missing_products": missing_products,
-    "confirmed": confirmed,
-    "confirm_error": confirm_error
-}
+    return {
+        "ok": True,
+        "order_id": order_id,
+        "customer": customer_name,
+        "created_lines": created_lines,
+        "missing_products": missing_products,
+        "confirmed": confirmed,
+        "confirm_error": confirm_error
     }
+
+
+# =========================
+# TEST VARIANTES DE WOOCOMMERCE
+# =========================
 
 @app.get("/test-woocommerce-variations")
 def test_woocommerce_variations():
 
-    product_id = 3298  # ID del producto padre Jacket 18 en WooCommerce
+    product_id = 3298
 
     url = f"{WOO_URL}/wp-json/wc/v3/products/{product_id}/variations"
 
@@ -496,6 +490,11 @@ def test_woocommerce_variations():
         "variations": response_data
     }
 
+
+# =========================
+# SINCRONIZAR STOCK ODOO → WOOCOMMERCE
+# =========================
+
 @app.get("/sync-stock-from-odoo")
 def sync_stock_from_odoo():
 
@@ -512,10 +511,6 @@ def sync_stock_from_odoo():
             "ok": False,
             "error": "Faltan variables de WooCommerce"
         }
-
-    # =========================
-    # 1. BUSCAR WEBSITE TARGO
-    # =========================
 
     website_ids = models.execute_kw(
         ODOO_DB,
@@ -534,10 +529,6 @@ def sync_stock_from_odoo():
         }
 
     website_id = website_ids[0]
-
-    # =========================
-    # 2. LEER VARIANTES DE ODOO
-    # =========================
 
     odoo_variants = models.execute_kw(
         ODOO_DB,
@@ -562,12 +553,7 @@ def sync_stock_from_odoo():
         }
     )
 
-    # =========================
-    # 3. LEER PRODUCTOS VARIABLES DE WOOCOMMERCE
-    # =========================
-
     woo_sku_map = {}
-
     page = 1
 
     while True:
@@ -607,9 +593,7 @@ def sync_stock_from_odoo():
             variations_response = requests.get(
                 variations_url,
                 auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
-                params={
-                    "per_page": 100
-                }
+                params={"per_page": 100}
             )
 
             if variations_response.status_code != 200:
@@ -634,10 +618,6 @@ def sync_stock_from_odoo():
 
         page += 1
 
-    # =========================
-    # 4. ACTUALIZAR STOCK EN WOOCOMMERCE
-    # =========================
-
     updated = []
     not_found_in_woo = []
     errors = []
@@ -649,7 +629,8 @@ def sync_stock_from_odoo():
         if not sku:
             continue
 
-        stock = variant.get("qty_available", 0)
+        # Usamos virtual_available para reflejar stock disponible considerando pedidos confirmados/reservas.
+        stock = variant.get("virtual_available", 0)
 
         try:
             stock = int(stock)
