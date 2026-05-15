@@ -707,3 +707,59 @@ def sync_stock_from_odoo():
         "not_found_in_woo": not_found_in_woo,
         "errors": errors
     }
+
+@app.get("/test-odoo-products-targo")
+def test_odoo_products_targo():
+
+    uid, models = get_odoo_connection()
+
+    if not uid:
+        return {
+            "ok": False,
+            "error": "No se pudo autenticar con Odoo"
+        }
+
+    website_ids = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "website",
+        "search",
+        [[["name", "ilike", "Targo"]]],
+        {"limit": 1}
+    )
+
+    if not website_ids:
+        return {
+            "ok": False,
+            "error": "No se encontró website Targo en Odoo"
+        }
+
+    website_id = website_ids[0]
+
+    products = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "product.template",
+        "search_read",
+        [[["website_id", "=", website_id]]],
+        {
+            "fields": [
+                "id",
+                "name",
+                "list_price",
+                "website_id",
+                "description_sale",
+                "product_variant_ids"
+            ],
+            "limit": 50
+        }
+    )
+
+    return {
+        "ok": True,
+        "website_id": website_id,
+        "count": len(products),
+        "products": products
+    }
