@@ -1,17 +1,22 @@
 import os
 import xmlrpc.client
+import requests
 from fastapi import FastAPI, Body
 
 app = FastAPI()
+
+# =========================
+# VARIABLES DE ENTORNO
+# =========================
 
 ODOO_URL = os.getenv("ODOO_URL")
 ODOO_DB = os.getenv("ODOO_DB")
 ODOO_USER = os.getenv("ODOO_USER")
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD")
 
-WOO_URL= https://tudominio.com
-WOO_CONSUMER_KEY= ck_9bb163e28c0ac6d60a5bc43462713771134075e5
-WOO_CONSUMER_SECRET= cs_0dbec5e5bcde37cf0ee4059c3d0fb5b405d47250
+WOO_URL = os.getenv("WOO_URL")
+WOO_CONSUMER_KEY = os.getenv("WOO_CONSUMER_KEY")
+WOO_CONSUMER_SECRET = os.getenv("WOO_CONSUMER_SECRET")
 
 
 @app.get("/")
@@ -21,6 +26,10 @@ def home():
         "service": "targo_odoo"
     }
 
+
+# =========================
+# TEST ODOO
+# =========================
 
 @app.get("/test-odoo")
 def test_odoo():
@@ -46,17 +55,44 @@ def test_odoo():
     }
 
 
-def extract_size_from_woo_item(item):
-    """
-    Intenta extraer la talla desde WooCommerce.
-    Woo puede mandar la talla en meta_data con keys como:
-    - Talla
-    - talla
-    - Size
-    - pa_talla
-    - attribute_talla
-    """
+# =========================
+# TEST WOOCOMMERCE
+# =========================
 
+@app.get("/test-woocommerce")
+def test_woocommerce():
+
+    if not WOO_URL or not WOO_CONSUMER_KEY or not WOO_CONSUMER_SECRET:
+        return {
+            "ok": False,
+            "error": "Faltan variables de entorno de WooCommerce en Railway"
+        }
+
+    url = f"{WOO_URL}/wp-json/wc/v3/products"
+
+    response = requests.get(
+        url,
+        auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
+        params={"per_page": 5}
+    )
+
+    try:
+        response_data = response.json()
+    except Exception:
+        response_data = response.text
+
+    return {
+        "ok": response.status_code == 200,
+        "status_code": response.status_code,
+        "response": response_data
+    }
+
+
+# =========================
+# FUNCIONES AUXILIARES
+# =========================
+
+def extract_size_from_woo_item(item):
     meta_data = item.get("meta_data", [])
 
     for meta in meta_data:
@@ -78,12 +114,6 @@ def extract_size_from_woo_item(item):
 
 
 def find_correct_variant(models, uid, product_template_id, size):
-    """
-    Busca la variante correcta dentro de product.product.
-    Primero intenta buscar por talla dentro del display_name.
-    Si no encuentra, regresa la primera variante como respaldo.
-    """
-
     variants = models.execute_kw(
         ODOO_DB,
         uid,
@@ -107,10 +137,6 @@ def find_correct_variant(models, uid, product_template_id, size):
         for variant in variants:
             display_name = str(variant.get("display_name", "")).upper()
 
-            # Busca coincidencias tipo:
-            # Jacket 10 (M)
-            # Jacket 10 / M
-            # Jacket 10 - M
             if (
                 f" {size}" in display_name
                 or f"/ {size}" in display_name
@@ -120,9 +146,30 @@ def find_correct_variant(models, uid, product_template_id, size):
             ):
                 return variant["id"]
 
-    # Respaldo: si no encuentra la talla, toma la primera variante
     return variants[0]["id"]
 
+
+def get_odoo_connection():
+    common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
+
+    uid = common.authenticate(
+        ODOO_DB,
+        ODOO_USER,
+        ODOO_PASSWORD,
+        {}
+    )
+
+    if not uid:
+        return None, None
+
+    models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
+
+    return uid, models
+
+
+# =========================
+# CREAR ORDEN DESDE WOOCOMMERCE
+# =========================
 
 @app.post("/create-order")
 async def create_order(data: dict = Body(...)):
@@ -141,18 +188,7 @@ async def create_order(data: dict = Body(...)):
     if not customer_name:
         customer_name = "Cliente WooCommerce"
 
-    # =========================
-    # CONEXIÓN ODOO
-    # =========================
-
-    common = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/common")
-
-    uid = common.authenticate(
-        ODOO_DB,
-        ODOO_USER,
-        ODOO_PASSWORD,
-        {}
-    )
+    uid, models = get_odoo_connection()
 
     if not uid:
         return {
@@ -160,7 +196,26 @@ async def create_order(data: dict = Body(...)):
             "error": "No se pudo autenticar con Odoo"
         }
 
-    models = xmlrpc.client.ServerProxy(f"{ODOO_URL}/xmlrpc/2/object")
+    # =========================
+    # EVITAR ÓRDENES DUPLICADAS
+    # =========================
+
+    existing_order_ids = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "sale.order",
+        "search",
+        [[["client_order_ref", "=", order_number]]],
+        {"limit": 1}
+    )
+
+    if existing_order_ids:
+        return {
+            "ok": True,
+            "message": "La orden ya existía en Odoo, no se duplicó",
+            "order_id": existing_order_ids[0]
+        }
 
     # =========================
     # 1. BUSCAR O CREAR CLIENTE
@@ -247,7 +302,7 @@ async def create_order(data: dict = Body(...)):
 
         try:
             price = float(item.get("price", 0))
-        except:
+        except Exception:
             price = 0
 
         size = extract_size_from_woo_item(item)
@@ -259,15 +314,10 @@ async def create_order(data: dict = Body(...)):
         print("Talla Woo:", size)
         print("Meta data Woo:", item.get("meta_data", []))
 
-        # Si Woo manda algo como:
-        # "Jacket 10 - Azul - M"
-        # nos quedamos con la primera parte:
-        # "Jacket 10"
         base_product_name = product_name.split(" - ")[0].strip()
 
         print("Nombre base para buscar en Odoo:", base_product_name)
 
-        # Buscar producto padre en Odoo
         template_ids = models.execute_kw(
             ODOO_DB,
             uid,
@@ -289,7 +339,6 @@ async def create_order(data: dict = Body(...)):
 
         product_template_id = template_ids[0]
 
-        # Buscar variante correcta por talla
         product_id = find_correct_variant(
             models,
             uid,
@@ -306,7 +355,6 @@ async def create_order(data: dict = Body(...)):
 
         print("Producto variante elegido:", product_id)
 
-        # Crear línea de venta
         line_id = models.execute_kw(
             ODOO_DB,
             uid,
@@ -337,25 +385,4 @@ async def create_order(data: dict = Body(...)):
         "customer": customer_name,
         "created_lines": created_lines,
         "missing_products": missing_products
-    }
-
-
-@app.get("/test-woocommerce")
-def test_woocommerce():
-
-    WOO_URL = os.getenv("WOO_URL")
-    WOO_CONSUMER_KEY = os.getenv("WOO_CONSUMER_KEY")
-    WOO_CONSUMER_SECRET = os.getenv("WOO_CONSUMER_SECRET")
-
-    url = f"{WOO_URL}/wp-json/wc/v3/products"
-
-    response = requests.get(
-        url,
-        auth=(WOO_CONSUMER_KEY, WOO_CONSUMER_SECRET),
-        params={"per_page": 5}
-    )
-
-    return {
-        "status_code": response.status_code,
-        "response": response.json()
     }
